@@ -1011,6 +1011,21 @@ static uint64_t ubo_ptr(const VkExec *ex, int st, const GfxShaderRes *r) {
     return a;
 }
 
+// That address as the stage's inline constants (c1) hold it at offset handle * 4; 0 when the constant bank is missing
+// or too short.
+static uint64_t c1_ptr(const VkExec *ex, int st, const GfxShaderRes *r) {
+    if (!ex->prog) return 0;
+    const uint8_t *ctl, *code;
+    uint32_t len, c1;
+    if (!find_stage(ex->prog, st, &ctl, &code, &len)) return 0;
+    memcpy(&c1, ctl + 0x700, 4);
+    uint32_t off = (uint32_t)r->handle * 4;
+    if (c1 >= len || c1 + off + 8 > len) return 0;
+    uint64_t a = 0;
+    memcpy(&a, code + c1 + off, 8);
+    return a;
+}
+
 static VkDescriptorBufferInfo ssbo_info(VkExec *ex, int st, const GfxShaderRes *r, int written) {
     if (!__atomic_load_n(&LIM.ubo_max, __ATOMIC_ACQUIRE)) limits_init();
     uint64_t max = LIM.sbo_max, align = LIM.sbo_align;
@@ -1020,6 +1035,10 @@ static VkDescriptorBufferInfo ssbo_info(VkExec *ex, int st, const GfxShaderRes *
     const p_bind_buf *b = NULL;
     if (slot >= 0 && slot < 16) b = ubo ? &ex->ubo[st][slot] : &ex->ssbo[st][slot];
     else if (ubo_ptr_res(r)) up.addr = ubo_ptr(ex, st, r), b = &up;   // size 0: up to the end of the backing
+    else if (r->cbuf_slot == 1) {
+        up.addr = c1_ptr(ex, st, r);
+        if (up.addr) b = &up;
+    }
     if (b) {
         // vk_caps.c: shaders translated for sbuf_align address the buffer from its address rounded down to it.
         uint64_t lead = vk_caps.sbuf_align ? b->addr & (vk_caps.sbuf_align - 1) : 0;

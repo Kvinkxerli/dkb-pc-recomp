@@ -22,6 +22,10 @@
 // One 64-bit and one 32-bit store per present; the guest reads the floats on its own threads, and each stays finite
 // and in range whichever store it sees.
 //
+// When Bananza 1.0.0 runs with the realtime patch set enabled (TOTK_REALTIME=1), the controller
+// reads the rounded integer simulation frame rate from patch page +12, and clock producers read
+// the measured 60 Hz ratio from patch page +8.
+//
 // The world clock (frame_step_world_us) sums the steps from the first present that finds the player actor away from
 // the origin, where the title screen keeps it: the end of the first save load. Recorded and scripted input
 // (input.c) runs on it, so a replay presses at the same game time at any frame rate and after a first load of any
@@ -51,6 +55,7 @@
 static _Atomic uint64_t *step_word;   // patch page +0: ratio (low float), seconds (high float)
 static double step_now = STEP_FIRST_S;   // the step the patch page holds: what the game steps each frame
 static _Atomic uint32_t *step_interval;   // patch page +8: seconds * 60 (patches-v143.txt realtime)
+static _Atomic uint32_t *bananza_target_fps;   // patch page +12: rounded simulation fps for Bananza 1.0.0 controller
 static uint64_t last_ns;
 static double samples[STEP_SAMPLES];
 static unsigned sample_count, sample_next;
@@ -64,6 +69,7 @@ static void step_store(float seconds) {
     memcpy(&iv, &interval, 4);
     atomic_store_explicit(step_word, (uint64_t)lo | (uint64_t)hi << 32, memory_order_release);
     atomic_store_explicit(step_interval, iv, memory_order_release);
+    if (bananza_target_fps) atomic_store_explicit(bananza_target_fps, (uint32_t)lroundf(1.0f / seconds), memory_order_release);
 }
 
 static void frame_limit_live(void);
@@ -71,7 +77,7 @@ static void frame_limit_live(void);
 void frame_step_init(void) {
     int fps60 = rt_patch_set("fps60"), realtime = rt_patch_set("realtime"), cloth = rt_patch_set("cloth");
     if (realtime < 0) {
-        rt_log("frame rate: no patch table, shipping 30 fps whole-vsync steps");
+        rt_log("frame rate: no timing patch table; using the game's original frame timing");
         return;
     }
     if (!rt_patch_enabled(realtime) && rt_patch_enabled(cloth)) {
@@ -81,9 +87,15 @@ void frame_step_init(void) {
     if (rt_patch_enabled(realtime)) {
         step_word = (_Atomic uint64_t *)rt_patch_page();
         step_interval = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 8);
+        if (!rt_game_version) bananza_target_fps = (_Atomic uint32_t *)((uint8_t *)rt_patch_page() + 12);
         step_store((float)STEP_FIRST_S);
     }
     frame_limit_live();   // TOTK_FPS_LIMIT decides the set fps60 from the start
+    if (!rt_game_version) {
+        rt_log("frame rate: Bananza real-time timing %s",
+               rt_patch_enabled(realtime) ? "enabled (host-paced)" : "disabled (shipping vsync steps)");
+        return;
+    }
     rt_log("frame rate: present interval %s, %s", rt_patch_enabled(fps60) ? "1..3 (above 30 fps)" : "2..3 (shipping 30 fps)",
            step_word ? "real-time step (5-frame average of display intervals, at most 1/15 s)" : "whole-vsync steps");
 }

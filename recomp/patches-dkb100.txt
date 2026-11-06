@@ -6,3 +6,24 @@ set hidproxy DKB_SKIP_HID_PROXY 1
 # a transfer memory and talks to IHidServer itself (nn::hid::server::CreateHidServerProxy), past the nn::hid calls the
 # host takes over, and aborts on a failed Result. The host serves no "hid" IPC service, so the call reports success.
 site hidproxy main 73bea0 9404d9d0 2a1f03e0   # bl sub_71008725E0 -> mov w0, wzr
+
+# Experimental host-paced frame timing (opt-in via TOTK_REALTIME, off by default).
+# The controller's common exit passes the measured simulation rate from patch page
+# +12 to the framework and requests interval 1 so the host pacer controls cadence.
+# At 1ead24, x8 is caller-saved scratch and immediately overwritten at 1eaf30:0 by
+# ldr w8, [x0, #0xe0]. At 1ead2c, +0x40 holds the controller's vsync interval (passed
+# to nvnWindowSetPresentInterval); forcing 1 under realtime delegates pacing to the host.
+set realtime TOTK_REALTIME 0
+site realtime main 1ead24 aa1303e0 @page:x8 b9400d01 b9005281 b9005681 aa1303e0
+site realtime main 1ead2c b9404281 52800021
+
+# Clock producers divide 60 by the controller's integer FPS. Read the precise
+# 60 Hz step at +8 instead. Preserve the address register, stack and flags; the
+# original time-scale multipliers, pause checks and seconds conversions remain.
+site realtime main 1bc834 1e201820 f81f0fe9 @page:x9 bd400920 f84107e9
+site realtime main 2d9fc8 1e201820 f81f0fe9 @page:x9 bd400920 f84107e9  # global and scene step
+site realtime main 2da120 1e201820 f81f0fe9 @page:x9 bd400920 f84107e9  # seconds producer divides by 60 next
+site realtime main 34e99c 1e201820 f81f0fe9 @page:x9 bd400920 f84107e9  # actor and camera clock
+site realtime main 34ec1c 1e201828 f81f0fe9 @page:x9 bd400928 f84107e9  # same clock with game time scale
+site realtime main 34ec68 1e201860 f81f0fe9 @page:x9 bd400920 f84107e9  # time-scale transition
+site realtime main 69fc60 1e201820 f81f0fe9 @page:x9 bd400920 f84107e9  # secondary scene clock
